@@ -44,6 +44,10 @@ extern struct file_system_type romfs_fs_type;
 extern struct file_system_type msdos_fs_type;
 #endif
 
+#ifdef CONFIG_PROC_FS
+extern struct file_system_type procfs_fs_type;
+#endif
+
 static struct file_system_type *file_systems[] = {
 /* first filesystem is default filesystem for mount w/o -t parm*/
 #ifdef CONFIG_ROMFS_FS
@@ -55,9 +59,12 @@ static struct file_system_type *file_systems[] = {
 #ifdef CONFIG_FS_FAT
         &msdos_fs_type,
 #endif
+#ifdef CONFIG_PROC_FS
+        &procfs_fs_type,
+#endif
         NULL
 };
-static const char *fsname[] = { NULL, "minix", "msdos", "romfs" };
+static const char *fsname[] = { NULL, "minix", "msdos", "romfs", "proc" };
 
 static struct file_system_type *get_fs_type(int type)
 {

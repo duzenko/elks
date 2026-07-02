@@ -66,6 +66,7 @@
 #define FST_MINIX       1
 #define FST_MSDOS       2
 #define FST_ROMFS       3
+#define FST_PROC        4
 
 /*
  * These are the fs-independent mount-flags: up to 16 flags are supported
@@ -426,6 +427,7 @@ extern int get_sector_size(kdev_t dev);
 extern struct super_block *get_super(kdev_t);
 extern void put_super(kdev_t);
 extern int do_umount(kdev_t);
+extern int do_mount(kdev_t dev, char *dir, int type, int flags, char *data);
 extern kdev_t ROOT_DEV;
 
 extern void mount_root(void);
