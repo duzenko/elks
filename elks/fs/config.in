@@ -15,6 +15,8 @@ mainmenu_option next_comment
 
 	bool 'FAT filesystem' CONFIG_FS_FAT 'n'
 
+	bool 'Proc filesystem' CONFIG_PROC_FS n
+
 	comment 'Filesystem settings'
 
 	bool 'External buffer cache'           CONFIG_FS_EXTERNAL_BUFFER  y
