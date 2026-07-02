@@ -331,6 +331,12 @@ static void INITPROC do_init_task(void)
 
     mount_root();
 
+#ifdef CONFIG_PROC_FS
+    /* automount /proc (no block device; pseudo dev keeps the super table happy) */
+    num = do_mount((kdev_t)0x0F01, "/proc", FST_PROC, 0, NULL);
+    if (num) printk("proc: mount error %d\n", num);
+#endif
+
     /* when no /bin/init, force initial process group on console to make signals work*/
     execinit = (strcmp(init_command, bininit) == 0) && (sys_access(bininit, 1) == 0);
     if (!execinit)
