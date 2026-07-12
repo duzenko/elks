@@ -6,6 +6,7 @@
 #include <linuxmt/types.h>
 #include <linuxmt/fs.h>
 #include <linuxmt/time.h>
+#include <linuxmt/timer.h>
 #include <linuxmt/signal.h>
 #include <linuxmt/wait.h>
 #include <linuxmt/ntty.h>
@@ -87,7 +88,23 @@ struct task_struct {
     int                         kstack_prevmax;
 
     unsigned int                kstack_magic;   /* To detect stack corruption */
+#ifdef CONFIG_286_PMODE
+    /* kstack-swap: schedule()'s sleep timer node must NOT live on the kernel
+     * stack: the timer bottom half (running from an IRQ) walks the global
+     * timer list while this task's kernel_stack bytes may be swapped out or
+     * mid-copy, so a stack-resident node reads as garbage.  This is the only
+     * globally-linked stack object in the kernel; give it a task_struct home. */
+    struct timer_list           sched_timer;
+
+    /* kstack-swap: real tasks run on the shared kernel_stack[] and save their
+     * frozen frames to an extended-memory image, so they never use t_kstack.
+     * Only the idle task still runs on its in-struct stack (IDLESTACK_BYTES),
+     * so sizing t_kstack down to that shrinks every task_struct by
+     * (KSTACK_BYTES - IDLESTACK_BYTES), fitting more tasks in the 64K DS. */
+    __u16                       t_kstack[IDLESTACK_BYTES/2];
+#else
     __u16                       t_kstack[KSTACK_BYTES/2];
+#endif
     struct pt_regs              t_regs;         /* registers on stack during syscall */
 };
 

@@ -109,4 +109,8 @@ seloff_t desc_limit(sel_t sel);
 /* install an interrupt gate (used by the IRQ/syscall path). */
 void idt_gate_set(unsigned int vect, unsigned int proc, sel_t selector, byte_t access);
 
+/* kstack-swap: allocate the extended-memory pool holding per-task kernel-stack
+ * save images.  Called once after gdt_init (A20 up) and before the first fork. */
+void kstack_image_init(void);
+
 #endif /* __ARCH_SEG286_H */

@@ -7,6 +7,7 @@
 #include <linuxmt/kernel.h>
 #include <linuxmt/memory.h>
 #include <linuxmt/limits.h>
+#include <linuxmt/sched.h>      /* kstack-swap: task_struct, current/previous/idle_task */
 
 #include <arch/segment.h>
 #include <arch/seg286.h>
@@ -104,6 +105,79 @@ addr_t desc_base(sel_t sel)
 seloff_t desc_limit(sel_t sel)
 {
     return gdt[SEL_INDEX(sel)].limit_lo;
+}
+
+/*
+ * kstack-swap: all real tasks share one kernel call-frame stack, kernel_stack[],
+ * at a fixed KERNEL_DS address.  On every context switch tswitch() saves the
+ * outgoing task's live region of kernel_stack into that task's save image and
+ * restores the incoming task's image.  Because the running stack is always at
+ * the same address, saved BP/SP frame chains stay valid across the swap.  This
+ * lets task_struct drop the per-task KSTACK_BYTES stack (see <linuxmt/sched.h>),
+ * reclaiming (KSTACK_BYTES - IDLESTACK_BYTES) of the 64K DS per task.
+ *
+ * The idle task is exempt: it keeps its small in-struct t_kstack (runs at
+ * intr_count 1, never enters via the syscall path, so never uses kernel_stack).
+ *
+ * The save images live in ONE extended-memory (>1MB) segment reached through a
+ * single GDT selector (kept small on the fixed-size GDT); task[] slot i's image
+ * is at offset i*KSTACK_BYTES.  Image offset x within slot i parallels
+ * kernel_stack offset kbase+x.  kstack_swap() runs on the neutral switch_stack
+ * (see tswitch in irqtab.S) so overwriting kernel_stack during a restore cannot
+ * corrupt its own frame.
+ */
+extern struct task_struct *previous;        /* set by schedule() before tswitch */
+
+__u16 kernel_stack[KSTACK_BYTES/2];         /* shared kernel call-frame stack */
+__u16 switch_stack[SWITCHSTACK_BYTES/2];    /* neutral stack for the swap copy */
+
+sel_t kstack_pool_sel;                      /* one selector for all task save images */
+
+void kstack_image_init(void)
+{
+    /* one >1MB segment: max_tasks images of KSTACK_BYTES each (must be <= 64K).
+     * The pool MUST be reserved through the XMS arena allocator when XMS is
+     * enabled: the floppy track cache and XMS buffers are handed out from
+     * XMS_START_ADDR upward, and squatting on 1M directly makes every track
+     * read shred the saved stack images (and vice versa).  Requires xms_init()
+     * to have run first - called after kernel_init(), before the first fork. */
+    addr_t pool;
+    addr_t size = (addr_t)(max_tasks + 1) * KSTACK_BYTES;   /* + idle's slot */
+#if defined(CONFIG_FS_XMS)
+    if (xms_enabled) {
+        pool = (addr_t)xms_alloc((unsigned int)((size + 1023) >> 10));
+        if (!pool) panic("no xms for kstack pool");
+    } else
+#endif
+        pool = XMS_START_ADDR;      /* XMS off: extended memory is all ours */
+    kstack_pool_sel = desc_alloc(pool, size, DESC_KDATA);
+    if (!kstack_pool_sel) panic("no kstack pool");
+}
+
+void kstack_swap(void)
+{
+    word_t kbase = (word_t)kernel_stack;
+    word_t ktop  = kbase + KSTACK_BYTES;
+    word_t sp;
+
+    /* A context participates in the swap iff its saved SP lies on the shared
+     * kernel_stack.  That covers every real task, AND idle when it was
+     * suspended from an interrupt (whose handler runs on kernel_stack); it
+     * skips idle's voluntary idle_loop schedule, which runs on the small
+     * in-struct idle stack - nothing of it lives on kernel_stack. */
+
+    /* save outgoing task's live frames: kernel_stack[t_ksp..top] -> its image */
+    sp = previous->t_ksp;
+    if (sp >= kbase && sp < ktop) {
+        word_t img = (word_t)(previous - task) * (word_t)KSTACK_BYTES + (sp - kbase);
+        fmemcpyb((void *)img, kstack_pool_sel, (void *)sp, KERNEL_DS, ktop - sp);
+    }
+    /* restore incoming task's frames: its image -> kernel_stack[t_ksp..top] */
+    sp = current->t_ksp;
+    if (sp >= kbase && sp < ktop) {
+        word_t img = (word_t)(current - task) * (word_t)KSTACK_BYTES + (sp - kbase);
+        fmemcpyb((void *)sp, KERNEL_DS, (void *)img, kstack_pool_sel, ktop - sp);
+    }
 }
 
 
