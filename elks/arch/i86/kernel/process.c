@@ -168,6 +168,30 @@ int arch_setup_sighandler_stack(register struct task_struct *t,
 
 void arch_build_stack(struct task_struct *t, void (*addr)())
 {
+#ifdef CONFIG_286_PMODE
+    /*
+     * kstack-swap: a task runs on the shared kernel_stack[] and its frozen
+     * frames live in its slot of the extended-memory image pool.  Build the
+     * fake tswitch() return frame at the top of that slot (via far pokes) and
+     * point t_ksp at the parallel kernel_stack offset; the first switch-in
+     * restores this frame onto kernel_stack and rets into addr().  Frame from
+     * t_ksp upward (ia16 tswitch pops FLAGS,si,di,es,bp then ret):
+     * F si di es bp IP.  FLAGS has IF set: tasks start with interrupts on.
+     */
+    extern __u16 kernel_stack[];
+    extern sel_t kstack_pool_sel;
+    word_t base = (word_t)(t - task) * (word_t)KSTACK_BYTES;     /* slot in pool */
+
+    if (addr == NULL)
+        addr = ret_from_syscall;
+    pokew(base + KSTACK_BYTES-2,  kstack_pool_sel, (word_t)addr);    /* IP */
+    pokew(base + KSTACK_BYTES-4,  kstack_pool_sel, 0);              /* BP */
+    pokew(base + KSTACK_BYTES-6,  kstack_pool_sel, KERNEL_DS);      /* ES */
+    pokew(base + KSTACK_BYTES-8,  kstack_pool_sel, 0);              /* DI */
+    pokew(base + KSTACK_BYTES-10, kstack_pool_sel, 0);              /* SI */
+    pokew(base + KSTACK_BYTES-12, kstack_pool_sel, 0x0202);         /* FLAGS (IF=1) */
+    t->t_ksp = (__u16)((word_t)kernel_stack + KSTACK_BYTES - 12);
+#else
     register __u16 *tsp = ((__u16 *)(&(t->t_regs.ax))) - 1;
 
     if (addr == NULL)
@@ -178,6 +202,7 @@ void arch_build_stack(struct task_struct *t, void (*addr)())
     t->t_ksp = (__u16)(tsp - 4);        /* Initial value for SP register */
 #else
     t->t_ksp = (__u16)(tsp - 3);        /* Initial value for SP register */
+#endif
 #endif
 }
 

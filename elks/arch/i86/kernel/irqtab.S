@@ -153,6 +153,42 @@ save_regs:
         push    %cx             // CX
         push    %bx             // BX
         push    %ax             // AX
+#ifdef CONFIG_286_PMODE
+//
+//      kstack-swap first-level entry (intr_count==1) dispatch.  pt_regs stays
+//      authoritative in current->t_regs for all three cases:
+//      - kernel thread interrupted (entry SS = kernel DS, not idle): its live
+//        frames and the CPU interrupt frame sit on kernel_stack above t_regs.sp;
+//        continue BELOW them so nothing is clobbered and a schedule() from
+//        here freezes handler+frames together as the task's continuation.
+//      - idle interrupted: kernel_stack is FREE (sleeping tasks' frames are in
+//        the image pool; idle loops on its small in-struct stack), so run the
+//        handler at kernel_stack top like a user entry.  idle has a full
+//        task_struct in PM builds, so its t_regs is real.
+//      - user/syscall entry: the task's kernel_stack region is empty; anchor
+//        at the top and copy the 6 pt_regs arg words (ax,bx,cx,dx,di,si)
+//        there so sys_* read their parameters off SP.
+//      Nested entries (intr_count>1) keep the istack unchanged.
+//
+        cmpw    $1,intr_count
+        jne     9f
+        mov     current,%bx
+        cmp     idle_task,%bx
+        je      7f              // idle: kernel_stack top (free while idle runs)
+        cmpw    $SEL_KDATA,TASK_USER_SS(%bx)
+        jne     7f              // user SS: anchor at kernel_stack top
+        mov     TASK_USER_SP(%bx),%sp   // kthread: continue below saved BP/int frame
+        jmp     9f
+7:      mov     %di,%bx         // preserve IRQ# pointer across movsw
+        mov     %sp,%si         // source = &current->t_regs.ax (regs just built)
+        mov     $kernel_stack+KSTACK_BYTES-12,%di   // dest = top 6 words
+        mov     $6,%cx
+        cld
+        rep     movsw           // ES=DS here; copies ax,bx,cx,dx,di,si
+        mov     %bx,%di         // restore IRQ# pointer
+        mov     $kernel_stack+KSTACK_BYTES-12,%sp   // SP -> copied ax on kernel_stack
+9:
+#endif
 //
 //      ds:[di] has IRQ number
 //
@@ -170,8 +206,12 @@ save_regs:
         call    trace_begin
 #endif
 
-        pop     %ax             // get syscall function code in AX
+        pop     %ax             // get syscall function code in AX (from kernel_stack copy in PM)
         call    syscall
+#ifdef CONFIG_286_PMODE
+        mov     current,%bx     // PM: retval must land in t_regs.ax; restore_regs re-anchors there
+        mov     %ax,TASK_USER_AX(%bx)
+#endif
         push    %ax             // syscall return value in ax
 
 //#ifdef CONFIG_TRACE
@@ -201,7 +241,17 @@ doirq:
 #ifndef CONFIG_ARCH_SWAN
         sti                     // Reenable interrupts
 #endif
+#ifdef CONFIG_286_PMODE
+        cmpw    $1,intr_count   // user IRQ runs on kernel_stack; pt_regs is in t_regs
+        jne     7f
+        mov     current,%bx
+        add     $TASK_USER_AX,%bx
+        jmp     8f
+7:      mov     %sp,%bx         // nested IRQ: pt_regs is on the istack
+8:
+#else
         mov     %sp,%bx         // Get pointer to pt_regs
+#endif
         cbw
         push    %ax             // IRQ for later
 
@@ -331,6 +381,12 @@ was_trap:
 //
 restore_regs:
         decw    intr_count
+#ifdef CONFIG_286_PMODE
+        jnz     6f              // returning to a nested level: pop regs from its stack
+        mov     current,%bx     // returning to user: re-anchor SP to current->t_regs.ax
+        lea     TASK_USER_AX(%bx),%sp
+6:
+#endif
         pop     %ax
         pop     %bx
         pop     %cx
@@ -368,6 +424,13 @@ ret_from_syscall:
         xor     %ax,%ax               // Just in case we are starting a new task
         push    %ax
         cli
+#ifdef CONFIG_286_PMODE
+//      A task's first return to user arrives here from kernel-thread context
+//      (intr_count 0), so the decw in restore_regs would drift the count to -1
+//      and take the nested-exit branch instead of the t_regs re-anchor.
+//      This IS a first-level exit to user mode: normalize before restoring.
+        movw    $1,intr_count
+#endif
         jmp     restore_regs
 
 /*
@@ -389,9 +452,24 @@ tswitch:
         push    %di
         push    %si
         mov     previous,%bx
-        mov     %sp,TASK_KRNL_SP(%bx)
+        mov     %sp,TASK_KRNL_SP(%bx)    // previous->t_ksp = SP (offset into kernel_stack)
+#ifdef CONFIG_286_PMODE
+//      kstack-swap: interrupts must be off for the whole swap: an IRQ mid-copy
+//      would run bottom halves that can read kernel_stack bytes (or wake tasks)
+//      while the stack image is torn between two tasks.  Each task's IF state
+//      is preserved in the flags it pushed before calling schedule()/tswitch.
+        pushf                   // save previous task's IF on its stack (before t_ksp!)
+        mov     %sp,TASK_KRNL_SP(%bx)   // re-save t_ksp including flags word
+        cli
+        mov     $switch_stack+SWITCHSTACK_BYTES,%sp  // neutral stack for the copy
+        call    kstack_swap             // save(previous) + restore(current) on kernel_stack
         mov     current,%bx
-        mov     TASK_KRNL_SP(%bx),%sp
+        mov     TASK_KRNL_SP(%bx),%sp    // SP = current->t_ksp
+        popf                    // restore incoming task's IF
+#else
+        mov     current,%bx
+        mov     TASK_KRNL_SP(%bx),%sp    // SP = current->t_ksp
+#endif
         pop     %si
         pop     %di
         pop     %es

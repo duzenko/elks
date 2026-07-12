@@ -115,6 +115,24 @@ void start_kernel(void)
 
 #ifdef CONFIG_286_PMODE
     /*
+     * Auto-tune task slots from RAM size: 2x tasks per 4x memory (sqrt scaling),
+     * i.e. max_tasks = round(16 * sqrt(total_MB)), capped at 64 (16MB+).  CMOS
+     * regs 0x17/0x18 report extended memory in KB.  Set before early_kernel_init
+     * so a /bootopts task=N still overrides it.
+     */
+    {
+        unsigned ext_kb, mb, n, r;
+        outb(0x17, 0x70); ext_kb  = inb(0x71);
+        outb(0x18, 0x70); ext_kb |= (unsigned)inb(0x71) << 8;
+        mb = (ext_kb >> 10) + 1;                 /* total MB including the first */
+        if (mb > 16) mb = 16;                    /* 16MB -> 64 tasks = cap */
+        n = 256u * mb;                           /* (16*sqrt(mb))^2 = 256*mb */
+        r = 0; while ((r + 1) * (r + 1) <= n) r++;   /* floor sqrt (r <= 64) */
+        if (n - r * r > r) r++;                  /* round to nearest integer */
+        max_tasks = r;
+    }
+
+    /*
      * We must enter protected mode before calling far_start_kernel as setup.S
      * relocated all .fartext CS segments to SEL_KFTEXT selectors.
      */
@@ -140,12 +158,43 @@ static void FARPROC far_start_kernel(void)
       * interrupts will always save registers onto istack, and never
       * to the t_regs struct at the end of a normal task struct.
       */
+#ifdef CONFIG_286_PMODE
+     /*
+      * kstack-swap: idle gets a FULL task_struct (t_regs included) and a save
+      * image slot.  The stock truncated idle relies on "idle always runs at
+      * intr_count 1" - but a kernel thread's voluntary sleep switches to idle
+      * WITHOUT raising intr_count, so an interrupt over idle at intr_count 0
+      * takes the utask path and anchors the handler at idle->t_regs, which
+      * for the truncated struct is unowned heap: the handler then shreds
+      * whatever the layout lottery put there (observed: buffer heads, idle's
+      * own runqueue links).  With a real t_regs the idle interrupt runs on
+      * the shared kernel_stack top like a user entry - always free while
+      * idle runs, since sleeping tasks' frames live in the image pool.
+      */
+     task = heap_alloc((max_tasks + 1) * sizeof(struct task_struct),
+         HEAP_TAG_TASK|HEAP_TAG_CLEAR);
+     if (!task) panic("No task mem");
+     idle_task = task + max_tasks;
+#else
      task = heap_alloc(max_tasks * sizeof(struct task_struct) +
          TASK_KSTACK + IDLESTACK_BYTES, HEAP_TAG_TASK|HEAP_TAG_CLEAR);
      if (!task) panic("No task mem");
      idle_task = (struct task_struct *)
          ((char *)task + max_tasks * sizeof(struct task_struct));
+#endif
+#ifdef CONFIG_286_PMODE
+    /* kstack-swap: the stock temp-stack anchor inside task[1] leaves only
+     * ~2 shrunken task structs (~1.2K) of room, and the floppy probe's call
+     * chain goes ~2.5K deep - observed (SP watchpoint) plowing below the
+     * task array into live heap objects.  Use a dedicated allocation. */
+    {
+        char *bootstack = heap_alloc(3072, HEAP_TAG_DRVR);
+        if (!bootstack) panic("No boot stack");
+        setsp(bootstack + 3072);
+    }
+#else
     setsp(&(task+1)->t_regs.ax);    /* change to a large temp stack (unused task #1) */
+#endif
     debug("SP SWITCH\n");
 
     debug("endbss %x task %x idle_task %x idle_stack %x\n",
@@ -153,6 +202,13 @@ static void FARPROC far_start_kernel(void)
 
     sched_init();                   /* init the idle and other task structs */
     kernel_init();                  /* continue kernel init running on large stack */
+
+#ifdef CONFIG_286_PMODE
+    /* extended-memory pool for per-task kstack save images.  Must run after
+     * kernel_init() (xms_init decides if the XMS arena owns extended memory)
+     * and before the first kfork_proc (arch_build_stack writes the pool). */
+    kstack_image_init();
+#endif
 
     /* allocate task struct #0/pid 1 and setup init_task() to run on next reschedule */
     kfork_proc(init_task);

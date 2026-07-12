@@ -20,6 +20,12 @@
 
 #define IDLESTACK_BYTES 160     /* Size of idle task stack (min 128) */
 
+#ifdef CONFIG_286_PMODE
+/* Size of the neutral stack used by tswitch's kstack_swap() while it copies the
+ * shared kernel_stack in/out (must hold only kstack_swap()'s own frame). */
+#define SWITCHSTACK_BYTES 256
+#endif
+
 #define KSTACK_GUARD    100     /* bytes before CHECK_KSTACK overflow warning */
 
 #define MAX_POLLFD      10      /* Maximum number of polled filedescs per process */
