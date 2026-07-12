@@ -63,11 +63,27 @@ pm_fault_vector:
         .set    fltv, 0
         .rept   32              // first 32 IDT entries report vector numbers 0..31
         pushw   $fltv
-        call    pm_exception_handler
+        jmp     pm_fault_common
         nop; nop; nop;          // each entry is 5 bytes code + 3 bytes NOP
         .set    fltv, fltv + 1
         .endr
         pushw   $0x00FF         // remainder vectors >= 32 report vector 255
+        jmp     pm_fault_common
+
+// Reload DS/ES to the kernel data selector before the C reporter runs.
+// panic()/printk() are DS-relative, so a fault taken while DS held a foreign
+// descriptor (e.g. a temp fmemcpy selector whose copy overran its limit) would
+// otherwise make the reporter re-fault reading its own format string -> double
+// -> triple fault -> reset, with nothing printed. Push the faulting DS/ES first
+// (pushing a segreg is safe even when it is a bad/limited selector) so
+// pm_exception_handler can display them.
+pm_fault_common:
+        push    %ds
+        push    %es
+        push    $SEL_KDATA
+        pop     %ds
+        push    $SEL_KDATA
+        pop     %es
         call    pm_exception_handler
 
 // send AL to COM1. Used as early_putchar before console init.

@@ -228,6 +228,8 @@ void pm_exception_handler(int arg)
 {
     unsigned int *p = (unsigned int *)&arg;
 
-    panic("EXC %04x CODE %04x CS %04x IP %04x FLAG %04x STK %04x %04x %04x %04x",
-        p[0], p[1], p[3], p[2], p[4], p[5], p[6], p[7], p[8]);
+    /* pm_fault_common pushed the faulting ES then DS ahead of the vector:
+     * p0=ES p1=DS p2=vec p3=errcode p4=IP p5=CS p6=FLAGS p7..=stack */
+    panic("EXC %04x CODE %04x CS %04x IP %04x FLAG %04x DS %04x ES %04x STK %04x %04x %04x",
+        p[2], p[3], p[5], p[4], p[6], p[1], p[0], p[7], p[8], p[9]);
 }
