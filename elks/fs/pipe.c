@@ -69,6 +69,36 @@ int pipe_lseek(struct inode *inode, struct file *file, loff_t offset,
     return -ESPIPE;
 }
 
+#ifdef CONFIG_286_PMODE
+/* PM: pipe buffers live in an extended-memory pool behind pipe_pool_sel
+ * (set up in pmode.c, sized 256 bytes per installed MB of RAM).
+ * PIPE_BASE() stores the slot offset inside the pool; slot index 0 is
+ * left unused so that a valid slot is never a NULL pointer. */
+#define PIPE_POOL_SLOTS 15                  /* slots 1..15; 16*bufsiz pool */
+extern unsigned int pipe_pool_sel;
+extern unsigned int pipe_bufsiz;
+static unsigned int pipe_slot_used;         /* bit i = slot i+1 in use */
+
+static unsigned char *get_pipe_mem(void)
+{
+    unsigned int i;
+
+    for (i = 0; i < PIPE_POOL_SLOTS; i++) {
+        if (!(pipe_slot_used & (1U << i))) {
+            pipe_slot_used |= (1U << i);
+            return (unsigned char *)((i + 1) * pipe_bufsiz);
+        }
+    }
+    return NULL;
+}
+
+static void free_pipe_mem(unsigned char *buf)
+{
+    unsigned int i = (unsigned int)buf / pipe_bufsiz;
+
+    pipe_slot_used &= ~(1U << (i - 1));
+}
+#else
 /* pipes are allocated from kernel local heap */
 static unsigned char *get_pipe_mem(void)
 {
@@ -79,6 +109,7 @@ static void free_pipe_mem(unsigned char *buf)
 {
     heap_free(buf);
 }
+#endif
 
 static size_t pipe_read(register struct inode *inode, struct file *filp,
                      char *buf, size_t count)
@@ -96,9 +127,17 @@ static size_t pipe_read(register struct inode *inode, struct file *filp,
     if (count > PIPE_LEN(inode)) count = PIPE_LEN(inode);
     chars = PIPE_SIZE(inode) - PIPE_TAIL(inode);
     if (chars > count) chars = count;
+#ifdef CONFIG_286_PMODE
+    fmemcpyb(buf, current->t_regs.ds,
+             PIPE_BASE(inode) + PIPE_TAIL(inode), pipe_pool_sel, chars);
+    if (chars < count)
+        fmemcpyb(buf + chars, current->t_regs.ds,
+                 PIPE_BASE(inode), pipe_pool_sel, count - chars);
+#else
     memcpy_tofs(buf, PIPE_BASE(inode) + PIPE_TAIL(inode), chars);
     if (chars < count)
         memcpy_tofs(buf + chars, PIPE_BASE(inode), count - chars);
+#endif
     if ((PIPE_TAIL(inode) += count) >= PIPE_SIZE(inode))
         PIPE_TAIL(inode) -= PIPE_SIZE(inode);
     PIPE_LEN(inode) -= count;
@@ -137,7 +176,12 @@ static size_t pipe_write(register struct inode *inode, struct file *filp,
             if (chars > count) chars = count;
             if (chars > free) chars = free;
 
+#ifdef CONFIG_286_PMODE
+            fmemcpyb(PIPE_BASE(inode) + head, pipe_pool_sel,
+                     buf, current->t_regs.ds, chars);
+#else
             memcpy_fromfs(PIPE_BASE(inode) + head, buf, chars);
+#endif
             buf += chars;
             if ((PIPE_HEAD(inode) += chars) >= PIPE_SIZE(inode))
                 PIPE_HEAD(inode) -= PIPE_SIZE(inode);
@@ -213,7 +257,11 @@ static int pipe_rdwr_open(register struct inode *inode,
     if (!PIPE_BASE(inode)) {
         if (!(PIPE_BASE(inode) = get_pipe_mem())) return -ENOMEM;
         /* PIPE_ fields set to zero by new_inode() */
+#ifdef CONFIG_286_PMODE
+        PIPE_SIZE(inode) = pipe_bufsiz;
+#else
         PIPE_SIZE(inode) = PIPE_BUFSIZ;
+#endif
     }
     if (filp->f_mode & FMODE_READ) {
         PIPE_READERS(inode)++;

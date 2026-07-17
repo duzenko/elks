@@ -133,6 +133,10 @@ __u16 switch_stack[SWITCHSTACK_BYTES/2];    /* neutral stack for the swap copy *
 
 sel_t kstack_pool_sel;                      /* one selector for all task save images */
 
+#define PIPE_POOL_SLOTS 15                  /* keep in sync with fs/pipe.c */
+sel_t pipe_pool_sel;                        /* far pool for pipe ring buffers */
+unsigned int pipe_bufsiz;                   /* runtime size: 256B per MB of RAM */
+
 void kstack_image_init(void)
 {
     /* one >1MB segment: max_tasks images of KSTACK_BYTES each (must be <= 64K).
@@ -152,6 +156,30 @@ void kstack_image_init(void)
         pool = XMS_START_ADDR;      /* XMS off: extended memory is all ours */
     kstack_pool_sel = desc_alloc(pool, size, DESC_KDATA);
     if (!kstack_pool_sel) panic("no kstack pool");
+
+    /* pipe buffer pool, same placement rules as the kstack pool above.
+     * Sized total RAM >> 14 (= total_kb >> 4, ~64 bytes per installed MB);
+     * 16 slots (fs/pipe.c uses 1..15, slot 0 stays free so a valid slot
+     * offset is never NULL).  286 caps RAM at 16M => bufsiz <= ~1000. */
+    {
+        addr_t psize;
+
+        /* total installed RAM (base + XMS, both from the BIOS/CMOS figures
+         * the boot loader stashed in the setup words) >> 14 */
+        pipe_bufsiz = (SETUP_MEM_KBYTES + SETUP_XMS_KBYTES) >> 4;
+        psize = (addr_t)(PIPE_POOL_SLOTS + 1) * pipe_bufsiz;
+#if defined(CONFIG_FS_XMS)
+        if (xms_enabled) {
+            pool = (addr_t)xms_alloc((unsigned int)((psize + 1023) >> 10));
+            if (!pool) panic("no xms for pipe pool");
+        } else
+#endif
+            pool = XMS_START_ADDR + size;   /* right after the kstack pool */
+        pipe_pool_sel = desc_alloc(pool, psize, DESC_KDATA);
+        if (!pipe_pool_sel) panic("no pipe pool");
+        printk("pipe: %d bufs x %u bytes in ext memory\n",
+               PIPE_POOL_SLOTS, pipe_bufsiz);
+    }
 }
 
 void kstack_swap(void)
