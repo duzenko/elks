@@ -67,7 +67,14 @@ void schedule(void)
     struct task_struct *prev;
     struct task_struct *next;
     jiff_t timeout = 0UL;
+#ifdef CONFIG_286_PMODE
+    /* kstack-swap: a stack-resident timer node would be linked into the global
+     * timer list while this task's kernel_stack bytes get swapped out - the
+     * timer bottom half would then read garbage.  Use the task_struct node. */
+#define timer   (prev->sched_timer)
+#else
     struct timer_list timer;
+#endif
 
     prev = current;
 
@@ -117,10 +124,26 @@ void schedule(void)
             add_timer(&timer);
         }
 
+#ifdef CONFIG_286_PMODE
+        {
+            /* kstack-swap: an interrupt between the context-global updates and
+             * the stack swap would see current/previous inconsistent with the
+             * live kernel_stack frames.  IF state is restored per-task. */
+            flag_t swflags;
+            save_flags(swflags);
+            clr_irq();
+            previous = prev;
+            current = next;
+            debug_sched("sched: %P\n");
+            tswitch();  /* Won't return for a new task */
+            restore_flags(swflags);
+        }
+#else
         previous = prev;
         current = next;
         debug_sched("sched: %P\n");
         tswitch();  /* Won't return for a new task */
+#endif
 
         if (timeout) {
             del_timer(&timer);
@@ -128,6 +151,9 @@ void schedule(void)
     } else if (current->pid)
         debug_sched("resched: %P prevstate %d\n", prev->state);
 }
+#ifdef CONFIG_286_PMODE
+#undef timer
+#endif
 
 static struct timer_list *next_timer;
 
