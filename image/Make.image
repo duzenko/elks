@@ -139,6 +139,10 @@ ifdef CONFIG_IMG_DEV
 	# Device folder has to be first or second for the 'fake dev' to work
 	mmd -i $(TARGET_FILE) ::/dev
 endif
+ifdef CONFIG_PROC_FS
+	# procfs mount point (auto-mounted at boot)
+	mmd -i $(TARGET_FILE) ::/proc
+endif
 	for f in $$(cd $(DESTDIR); find * -name '*'); do \
 		if [ -d $(DESTDIR)/$$f -a "$$f" != "dev" ]; then mmd -D o -i $(TARGET_FILE) ::$$f || exit 1; fi; \
 		if [ -f $(DESTDIR)/$$f ]; then mcopy -i $(TARGET_FILE) $(FAT_COPYOPTS) $(DESTDIR)/$$f ::$$f || exit 1; fi; \
