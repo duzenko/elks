@@ -906,12 +906,14 @@ int main(int argc, char **argv) {
 					}
     					if ((code = do_stor(datafd, command)) > 0) {
 		    				write(controlfd, complete, strlen(complete));
-						close(datafd);
+						/* RST-close the drained upload socket so its control
+						 * block frees immediately instead of lingering in
+						 * TIME_WAIT/FIN_WAIT - avoids ktcp heap exhaustion
+						 * under rapid upload churn. Safe: whole file already read. */
+						net_close(datafd, 1);
 					} else {
-						if (code == -2)
-							/* must force close */
-							net_close(datafd, 1); /* Error: Need RST to stop data flow */
-						else close(datafd);
+						/* force RST on both error paths too */
+						net_close(datafd, 1);
 					}
 					datafd = -1;
 					break;
