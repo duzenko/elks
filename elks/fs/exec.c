@@ -698,6 +698,12 @@ static int FARPROC execve_os2(struct inode *inode, struct file *filp,
         if (seg+1 == os2hdr.auto_data_segment)  /* save auto data segment */
             seg_data = mm_table[seg];
 
+#ifdef CONFIG_286_PMODE
+        /* code selector isn't writable in PM; make it writable to load & relocate */
+        if (!(segp->flags & NESEG_DATA))
+            desc_chaccess(mm_table[seg]->base, DESC_KDATA);
+#endif
+
         /* clear bss */
         if (segp->min_alloc > segp->size) {
             n = segp->min_alloc - segp->size;
@@ -773,6 +779,15 @@ static int FARPROC execve_os2(struct inode *inode, struct file *filp,
             }
         }
     }
+
+#ifdef CONFIG_286_PMODE
+    /* all code segments loaded & relocated; restore executable access for use as CS */
+    for (seg = 0; seg < os2hdr.num_segments; seg++) {
+        if (!(ne_segment_table[seg].flags & NESEG_DATA))
+            desc_chaccess(mm_table[seg]->base, DESC_KCODE);
+    }
+#endif
+
     /* From this point, exec() will surely succeed */
 
     /* set data/stack limits and copy argc/argv */
