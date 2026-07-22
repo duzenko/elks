@@ -99,6 +99,10 @@ endif
 #	mfs $(VERBOSE) $(TARGET_FILE) addfs Filelist $(DESTDIR)
 	mfs $(VERBOSE) $(TARGET_FILE) genfs -a $(MINIX_MKFSOPTS) $(DESTDIR)
 #	mfs $(VERBOSE) $(TARGET_FILE) genfs $(MINIX_MKFSOPTS) $(DESTDIR)
+ifdef CONFIG_PROC_FS
+	# procfs mount point (auto-mounted at boot)
+	mfs $(TARGET_FILE) mkdir /proc
+endif
 ifdef CONFIG_IMG_DEV
 	# command to make char/block devices in image (no sudo required)
 	$(MAKE) -f Make.devices "MKDEV=mfs $(TARGET_FILE) mknod"
@@ -134,6 +138,10 @@ fatfs: template
 ifdef CONFIG_IMG_DEV
 	# Device folder has to be first or second for the 'fake dev' to work
 	mmd -i $(TARGET_FILE) ::/dev
+endif
+ifdef CONFIG_PROC_FS
+	# procfs mount point (auto-mounted at boot)
+	mmd -i $(TARGET_FILE) ::/proc
 endif
 	for f in $$(cd $(DESTDIR); find * -name '*'); do \
 		if [ -d $(DESTDIR)/$$f -a "$$f" != "dev" ]; then mmd -D o -i $(TARGET_FILE) ::$$f || exit 1; fi; \
