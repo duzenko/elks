@@ -68,12 +68,29 @@ pm_fault_vector:
         .set    fltv, fltv + 1
         .endr
         pushw   $0x00FF         // remainder vectors >= 32 report vector 255
+        .extern do_exit
+        .extern intr_count
+        .extern istack
 pm_fault_common:
         push    %es             // save ES & DS for display in case of bad segment
         push    %ds             // register load or limit/protection violation,
         push    $SEL_KDATA      // then load valid DS for C handler
         pop     %ds
-        call    pm_exception_handler
+        // A user-mode fault (intr_count == 0) must not reach panic(): panic runs
+        // printk, which requires SS==DS, but here SS is still the faulting user
+        // stack, so printk re-faults and recurses to a triple fault.  Instead
+        // switch to the kernel interrupt stack and kill the process with SIGSEGV.
+        // do_exit() is noreturn, so the fault frame needs no cleanup.
+        cmpw    $1,intr_count
+        jnc     9f                      // intr_count >= 1: kernel/nested fault -> panic
+        incw    intr_count
+        mov     $SEL_KDATA,%ax
+        mov     %ax,%ss
+        mov     $istack,%sp
+        mov     %ax,%es
+        push    $11                     // SIGSEGV
+        call    do_exit                 // noreturn
+9:      call    pm_exception_handler
         // no return
 
 // send AL to COM1. Used as early_putchar before console init.
