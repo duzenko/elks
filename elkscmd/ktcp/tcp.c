@@ -247,6 +247,8 @@ static void tcp_established(struct iptcp_s *iptcp, struct tcpcb_s *cb)
 	    in_ntoa(cb->remaddr), ntohs(h->sport), ntohs(h->dport));
 #endif
 	rmv_all_retrans_cb(cb);
+	if (cb->bytes_to_push > 0)
+	    tcpcb_need_push--;
 
 	if (cb->state == TS_CLOSE_WAIT) {
 	    //cbs_in_user_timeout--;	/* CLOSE_WAIT does not timeout */
@@ -354,8 +356,10 @@ static void tcp_synrecv(struct iptcp_s *iptcp, struct tcpcb_s *cb)
 {
     struct tcphdr_s *h = iptcp->tcph;
 
-    if (h->flags & TF_RST)
-	cb->state = TS_LISTEN;		/* FIXME: not valid, should dealloc extra CB*/
+    if (h->flags & TF_RST) {
+	rmv_all_retrans_cb(cb);
+	tcpcb_remove_cb(cb);
+    }
     else if ((h->flags & TF_ACK) == 0)
 	debug_tcp("tcp: NO ACK IN SYNRECV\n");
     else {

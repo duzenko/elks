@@ -94,7 +94,8 @@ struct tdb_return_data {
 struct tdb_accept_ret {
     char type;
     int ret_value;
-    struct socket *sock;
+    struct socket *sock;		/* listen socket, for wake_up */
+    struct socket *newsock;		/* accepted socket, gets addr filled in */
     __u32 addr_ip;
     __u16 addr_port;
     __u32 locaddr;

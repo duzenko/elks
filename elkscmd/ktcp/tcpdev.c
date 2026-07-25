@@ -168,8 +168,8 @@ static void tcpdev_accept(void)
 
     accept_ret.type = TDT_ACCEPT;
     accept_ret.ret_value = 0;
-    accept_ret.sock = sock;		/* report back listen socket*/
-    //accept_ret.sock = db->newsock;	/* report back new socket*/
+    accept_ret.sock = sock;		/* report back listen socket, for wake_up */
+    accept_ret.newsock = db->newsock;	/* kernel stores addr into this sock */
     accept_ret.addr_ip = cb->remaddr;
     accept_ret.addr_port = htons(cb->remport);
     accept_ret.locaddr = cb->localaddr;
@@ -201,8 +201,8 @@ void tcpdev_notify_accept(struct tcpcb_s *cb)
 
     accept_ret.type = TDT_ACCEPT;
     accept_ret.ret_value = 0;
-    accept_ret.sock = listencb->sock;	/* report back listen socket*/
-    //accept_ret.sock = listencb->newsock;	/* report back new socket*/
+    accept_ret.sock = listencb->sock;	/* report back listen socket, for wake_up */
+    accept_ret.newsock = listencb->newsock;	/* kernel stores addr into this sock */
     accept_ret.addr_ip = cb->remaddr;
     accept_ret.addr_port = htons(cb->remport);
     accept_ret.locaddr = cb->localaddr;
@@ -226,7 +226,8 @@ static void tcpdev_connect(void)
 
     n = tcpcb_find_by_sock(db->sock);
     if (!n || n->tcpcb.state != TS_CLOSED) {
-	debug_tcp("tcp: panic in connect\n");
+	debug_tcp("tcpdev_connect: cb not found, returning -EPIPE\n");
+	retval_to_sock(db->sock, -EPIPE);
 	return;
     }
 
@@ -274,7 +275,8 @@ static void tcpdev_read(void)
 
     n = tcpcb_find_by_sock(sock);
     if (!n || n->tcpcb.state == TS_CLOSED) {
-	printf("ktcp: panic in read\n");
+	debug_tcp("tcpdev_read: cb not found, returning -EPIPE\n");
+	retval_to_sock(sock, -EPIPE);
 	return;
     }
 
